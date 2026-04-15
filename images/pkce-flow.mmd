@@ -1,0 +1,13 @@
+sequenceDiagram
+    participant B as Browser / Client
+    participant IDP as Authorization Server
+
+    B->>B: generate code_verifier (random)
+    B->>B: code_challenge = SHA256(code_verifier)
+    B->>IDP: GET /authorize?code_challenge=...&state=...
+    IDP->>B: redirect to login
+    B->>IDP: user authenticates
+    IDP->>B: redirect with code=ABC
+    B->>IDP: POST /token (code=ABC + code_verifier)
+    IDP->>IDP: SHA256(code_verifier) === stored code_challenge?
+    IDP->>B: access_token, id_token, refresh_token

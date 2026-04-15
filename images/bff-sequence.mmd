@@ -1,0 +1,21 @@
+sequenceDiagram
+    participant B as Browser (SPA)
+    participant BFF as BFF Proxy
+    participant IDP as Identity Provider
+    participant API as Backend API
+
+    B->>BFF: GET /auth/login
+    BFF->>BFF: generate state, nonce, code_verifier
+    BFF->>B: set HttpOnly cookies (state, nonce, verifier)
+    BFF->>B: 302 redirect to IDP /authorize
+    B->>IDP: user authenticates
+    IDP->>BFF: 302 callback with code + state
+    BFF->>BFF: validate state cookie
+    BFF->>IDP: POST /token (code + code_verifier)
+    IDP->>BFF: tokens
+    BFF->>BFF: verify JWT signatures + validate claims
+    BFF->>B: set HttpOnly auth cookies + csrf_token cookie
+    B->>BFF: POST /api/data + X-CSRF-Token header
+    BFF->>BFF: validate CSRF token match
+    BFF->>API: proxied request + X-User-Sub / X-User-Email
+    API->>B: response

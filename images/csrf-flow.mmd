@@ -1,0 +1,10 @@
+sequenceDiagram
+    participant V as Victim browser
+    participant E as evil.com
+    participant A as api.yourapp.com
+
+    V->>E: visits malicious page
+    E->>V: hidden form targeting api.yourapp.com
+    V->>A: POST /transfer (browser auto-attaches session cookie)
+    A->>A: executes transfer
+    Note over A,V: browser blocks JS from reading the response (CORS),<br/>but the server already acted on the request

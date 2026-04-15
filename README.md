@@ -45,18 +45,7 @@ The victim doesn't lose their token. They just unknowingly transfer money, chang
 
 A key characteristic of CSRF attacks: they look like normal user activity in server logs. They're systematically underreported.
 
-```mermaid
-sequenceDiagram
-    participant V as Victim browser
-    participant E as evil.com
-    participant A as api.yourapp.com
-
-    V->>E: visits malicious page
-    E->>V: hidden form targeting api.yourapp.com
-    V->>A: POST /transfer (browser auto-attaches session cookie)
-    A->>A: executes transfer
-    Note over A,V: browser blocks JS from reading the response (CORS),<br/>but the server already acted on the request
-```
+![CSRF attack flow](images/csrf-flow.png)
 
 ### "But… doesn't CORS protect us from CSRF?"
 
@@ -173,21 +162,7 @@ SPAs can't store a Client Secret securely. Any secret embedded in frontend code 
 
 Even if an attacker intercepts the authorization code, they can't exchange it without the verifier.
 
-```mermaid
-sequenceDiagram
-    participant B as Browser / Client
-    participant IDP as Authorization Server
-
-    B->>B: generate code_verifier (random)
-    B->>B: code_challenge = SHA256(code_verifier)
-    B->>IDP: GET /authorize?code_challenge=...&state=...
-    IDP->>B: redirect to login
-    B->>IDP: user authenticates
-    IDP->>B: redirect with code=ABC
-    B->>IDP: POST /token (code=ABC + code_verifier)
-    IDP->>IDP: SHA256(code_verifier) === stored code_challenge?
-    IDP->>B: access_token, id_token, refresh_token
-```
+![Authorization Code Flow with PKCE](images/pkce-flow.png)
 
 ### OAuth 2.0: What Can Go Wrong
 
@@ -250,15 +225,7 @@ The **Backend for Frontend (BFF)** pattern is the architectural response to this
 
 The BFF pattern introduces a thin backend layer, co-located with the frontend, acting as its proxy, that owns the entire authentication flow:
 
-```mermaid
-flowchart TD
-    B[Browser SPA] -->|all requests| BFF[BFF Proxy]
-    BFF -->|OAuth 2.0 + PKCE| IDP[Identity Provider]
-    BFF -->|proxies with X-User-* headers| API[Backend API]
-    BFF -->|sets HttpOnly + Secure + SameSite cookies| B
-    IDP -->|tokens| BFF
-    API -->|response| BFF
-```
+![BFF architecture overview](images/bff-architecture.png)
 
 **How it works:**
 
@@ -269,29 +236,7 @@ flowchart TD
 5. The BFF sets an HTTP-only, Secure, SameSite cookie, tokens never touch the browser's JavaScript
 6. Subsequent API calls from the SPA go through the BFF, which attaches the token server-side
 
-```mermaid
-sequenceDiagram
-    participant B as Browser (SPA)
-    participant BFF as BFF Proxy
-    participant IDP as Identity Provider
-    participant API as Backend API
-
-    B->>BFF: GET /auth/login
-    BFF->>BFF: generate state, nonce, code_verifier
-    BFF->>B: set HttpOnly cookies (state, nonce, verifier)
-    BFF->>B: 302 redirect to IDP /authorize
-    B->>IDP: user authenticates
-    IDP->>BFF: 302 callback with code + state
-    BFF->>BFF: validate state cookie
-    BFF->>IDP: POST /token (code + code_verifier)
-    IDP->>BFF: tokens
-    BFF->>BFF: verify JWT signatures + validate claims
-    BFF->>B: set HttpOnly auth cookies + csrf_token cookie
-    B->>BFF: POST /api/data + X-CSRF-Token header
-    BFF->>BFF: validate CSRF token match
-    BFF->>API: proxied request + X-User-Sub / X-User-Email
-    API->>B: response
-```
+![BFF login and request sequence](images/bff-sequence.png)
 
 Which gives you, in one line:
 

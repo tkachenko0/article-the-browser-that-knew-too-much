@@ -1,0 +1,7 @@
+flowchart TD
+    B[Browser SPA] -->|all requests| BFF[BFF Proxy]
+    BFF -->|OAuth 2.0 + PKCE| IDP[Identity Provider]
+    BFF -->|proxies with X-User-* headers| API[Backend API]
+    BFF -->|sets HttpOnly + Secure + SameSite cookies| B
+    IDP -->|tokens| BFF
+    API -->|response| BFF
