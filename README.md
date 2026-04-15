@@ -9,7 +9,7 @@ And right now, that gap matters more than ever.
 
 In April 2026, Anthropic announced **Claude Mythos Preview**, a new tier of model, larger and more capable than any Opus before it, with cybersecurity skills the industry is still processing. Mythos reads a codebase, hypothesizes vulnerabilities, runs the actual application to confirm or reject them, and produces a bug report with a proof-of-concept exploit. In pre-release testing it found thousands of previously unknown zero-day vulnerabilities across every major operating system and browser, including a 27-year-old flaw in OpenBSD and a 16-year-old flaw in FFmpeg, bugs that had survived decades of human review and millions of automated tests.
 
-The implication is direct: soon, customers, auditors, and non-technical stakeholders will be able to point an agent at a vendor's application and get a structured security report without writing a single line of code.
+In practice, this means customers, auditors, and non-technical stakeholders will soon be able to point an agent at a vendor's application and get back a structured security report without writing a single line of code.
 
 > _A note before we start: don't take my word for any of this. Security is a field where second opinions matter. Read the specs, check what others have implemented, and form your own conclusions. What follows is my attempt to connect a lot of dots that had been floating separately in my head and I may have gotten some of them wrong. If you spot something, say so in the comments._
 
@@ -29,7 +29,7 @@ Modern frameworks escape output by default, which helps. But it doesn't eliminat
 - Third-party libraries can be vulnerable or, as happened with `axios@1.14.1` in early 2025, they can be _deliberately compromised_ in a supply chain attack that installs a Remote Access Trojan on developer machines
 - Browser extensions running on your site are outside your control entirely
 
-**The key conclusion:**
+So the rule of thumb is simple:
 
 > _"Any data accessible to JavaScript is accessible to an attacker via XSS."_
 
@@ -54,7 +54,7 @@ sequenceDiagram
     V->>E: visits malicious page
     E->>V: hidden form targeting api.yourapp.com
     V->>A: POST /transfer (browser auto-attaches session cookie)
-    A->>A: executes transfer ✓
+    A->>A: executes transfer
     Note over A,V: browser blocks JS from reading the response (CORS),<br/>but the server already acted on the request
 ```
 
@@ -82,7 +82,7 @@ HTTPS is necessary but not sufficient. The cookie configuration matters too.
 
 ## Secure Token Storage
 
-Here's where it all comes together. After understanding the attack surface, the question is: **where should we store authentication tokens?**
+Once the attack surface is clear, the obvious next question is: **where should we store authentication tokens?**
 
 Let's look at the options honestly:
 
@@ -159,7 +159,7 @@ OAuth 2.0 is an authorization framework that allows an application to access res
 
 OAuth 2.0 defines several "grant types" (flows). For SPAs, the right choice is:
 
-**Authorization Code Flow with PKCE** — and here's why.
+**Authorization Code Flow with PKCE**. Here's why.
 
 The basic Authorization Code flow works like this: the user authenticates with the Authorization Server, which returns a short-lived _code_ to the client. The client exchanges that code for tokens. This is secure for server-side apps that can store a **Client Secret**, used to authenticate the client during the exchange.
 
@@ -184,12 +184,12 @@ sequenceDiagram
     IDP->>B: redirect to login
     B->>IDP: user authenticates
     IDP->>B: redirect with code=ABC
-    B->>IDP: POST /token — code=ABC + code_verifier
+    B->>IDP: POST /token (code=ABC + code_verifier)
     IDP->>IDP: SHA256(code_verifier) === stored code_challenge?
-    IDP->>B: ✅ access_token, id_token, refresh_token
+    IDP->>B: access_token, id_token, refresh_token
 ```
 
-### OAuth 2.0 — What Can Go Wrong
+### OAuth 2.0: What Can Go Wrong
 
 Several implementation mistakes routinely turn up in real applications:
 
@@ -293,7 +293,7 @@ sequenceDiagram
     API->>B: response
 ```
 
-**The result:**
+Which gives you, in one line:
 
 > _"The frontend doesn't know OAuth exists. The backend doesn't know tokens exist."_
 
@@ -306,9 +306,9 @@ The SPA just makes HTTP requests. Authentication is handled entirely outside Jav
 A properly implemented BFF addresses the full threat model:
 
 - **XSS**: HTTP-only cookies, JavaScript can never read the token
-- **CSRF**: Two layers — `SameSite=Strict` on auth cookies, plus the **Double Submit Cookie Pattern**: after login, the BFF sets a separate `csrf_token` cookie with `httpOnly: false` so the frontend can read it via JavaScript and send it as an `X-CSRF-Token` header on every `/api/*` request. The BFF validates the match using `crypto.timingSafeEqual` to prevent timing attacks. An attacker on a different origin can cause the browser to send the cookie automatically, but cannot read its value to forge the header.
+- **CSRF**: Two layers. First, `SameSite=Strict` on auth cookies. Second, the **Double Submit Cookie Pattern**: after login, the BFF sets a separate `csrf_token` cookie with `httpOnly: false` so the frontend can read it via JavaScript and send it as an `X-CSRF-Token` header on every `/api/*` request. The BFF validates the match using `crypto.timingSafeEqual` to prevent timing attacks. An attacker on a different origin can cause the browser to send the cookie automatically, but cannot read its value to forge the header.
 - **MITM**: `Secure=true` flag, tokens only travel over HTTPS
-- **JWT**: Signature verification via JWKS, explicit algorithm whitelist, full claim validation (`iss`, `aud`, `exp`, `sub`), plus token consistency check — if only one of `id_token`/`access_token` is present, the session is considered tampered and all cookies are cleared
+- **JWT**: Signature verification via JWKS, explicit algorithm whitelist, full claim validation (`iss`, `aud`, `exp`, `sub`), plus a token consistency check. If only one of `id_token`/`access_token` is present, the session is considered tampered and all cookies are cleared
 - **OAuth 2.0**: State parameter validation, nonce validation, PKCE (`code_challenge`/`code_verifier`)
 
 ### BFF Notes and Trade-offs
@@ -316,7 +316,7 @@ A properly implemented BFF addresses the full threat model:
 - The BFF doesn't have to be a generic proxy. It can be implemented as a library for a specific framework, eliminating the extra network hop
 - For mobile apps, cookie-based flows are more complex since mobile isn't a browser
 
-The open-source implementation referenced throughout this article is available at [tkachenko0/oauth2-bff-proxy](https://github.com/tkachenko0/oauth2-bff-proxy). It supports AWS Cognito, Microsoft Entra ID, and Keycloak out of the box, and the README documents every security decision in detail — including exactly why each cookie attribute is set the way it is, and how the Double Submit Cookie Pattern is wired up end-to-end.
+The open-source implementation referenced throughout this article is available at [tkachenko0/oauth2-bff-proxy](https://github.com/tkachenko0/oauth2-bff-proxy). It supports AWS Cognito, Microsoft Entra ID, and Keycloak out of the box, and the README documents every security decision in detail, including exactly why each cookie attribute is set the way it is, and how the Double Submit Cookie Pattern is wired up end to end.
 
 ## Resources and Playgrounds
 
@@ -335,4 +335,4 @@ The open-source implementation referenced throughout this article is available a
 - [jwt.io](https://jwt.io)
 - [RFC 7519 - JSON Web Token](https://datatracker.ietf.org/doc/html/rfc7519)
 
-> _If something here is wrong, incomplete, or could be explained better, I'd genuinely like to know. Drop a comment below — this is the kind of topic where the discussion is often more valuable than the article._
+> _If something here is wrong, incomplete, or could be explained better, I'd genuinely like to know. Drop a comment below. On topics like this the discussion is often more valuable than the article itself._
