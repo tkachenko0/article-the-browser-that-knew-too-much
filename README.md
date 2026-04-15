@@ -2,16 +2,16 @@
 
 _XSS, CSRF, OAuth 2.0, JWTs, the BFF Pattern, and are you ready for Claude Mythos?_
 
-> _A note before we start: don't take my word for any of this. Security is a field where second opinions matter. Read the specs, check what others have implemented, and form your own conclusions. What follows is my attempt to connect a lot of dots that had been floating separately in my head — and I may have gotten some of them wrong. If you spot something, say so in the comments._
-
 Web security is one of those domains where the gap between knowing a concept and applying it correctly is surprisingly wide. XSS, CSRF, MITM...
-everyone's heard of them. But the path from "I know what XSS is" to "my token storage is actually safe" is full of non obvious decisions.
+Everyone's heard of them. But the path from "I know what XSS is" to "my token storage is actually safe" is full of non obvious decisions.
 
 And right now, that gap matters more than ever.
 
-In April 2026, Anthropic announced **Claude Mythos Preview**, a new tier of model, larger and more capable than any Opus before it, with cybersecurity skills the industry is still processing. Used with Claude Code, Mythos reads a codebase, hypothesizes vulnerabilities, runs the actual application to confirm or reject them, and produces a bug report with a proof-of-concept exploit autonomously, in parallel across every file. In pre-release testing it found thousands of previously unknown zero-day vulnerabilities across every major operating system and browser, including a 27-year-old flaw in OpenBSD and a 16-year-old flaw in FFmpeg, bugs that had survived decades of human review and millions of automated tests.
+In April 2026, Anthropic announced **Claude Mythos Preview**, a new tier of model, larger and more capable than any Opus before it, with cybersecurity skills the industry is still processing. Mythos reads a codebase, hypothesizes vulnerabilities, runs the actual application to confirm or reject them, and produces a bug report with a proof-of-concept exploit. In pre-release testing it found thousands of previously unknown zero-day vulnerabilities across every major operating system and browser, including a 27-year-old flaw in OpenBSD and a 16-year-old flaw in FFmpeg, bugs that had survived decades of human review and millions of automated tests.
 
 The implication is direct: soon, customers, auditors, and non-technical stakeholders will be able to point an agent at a vendor's application and get a structured security report without writing a single line of code.
+
+> _A note before we start: don't take my word for any of this. Security is a field where second opinions matter. Read the specs, check what others have implemented, and form your own conclusions. What follows is my attempt to connect a lot of dots that had been floating separately in my head and I may have gotten some of them wrong. If you spot something, say so in the comments._
 
 ## The Classic Attacks (That Still Work)
 
@@ -19,29 +19,21 @@ The implication is direct: soon, customers, auditors, and non-technical stakehol
 
 XSS is old. It's been on the OWASP Top 10 for decades. It also keeps happening.
 
-The concept is simple: an attacker finds a way to inject JavaScript into your page. Once that script runs in a victim's browser, it has access to everything JavaScript can touch, cookies, localStorage, sessionStorage, runtime variables. It can silently exfiltrate tokens, session IDs, or form data to an attacker-controlled server.
+The concept is simple: an attacker finds a way to inject JavaScript into your page. Once that script runs in a victim's browser, it has access to everything JavaScript can touch, cookies, localStorage, sessionStorage, runtime variables. It can silently exfiltrate tokens, session IDs, or form data to an attacker controlled server.
 
 **"But I'm using React/Vue/Angular..."**
 
 Modern frameworks escape output by default, which helps. But it doesn't eliminate the risk:
 
 - `dangerouslySetInnerHTML` in React and `v-html` in Vue bypass escaping entirely
-- Third-party libraries can be vulnerable - or, as happened with `axios@1.14.1` in early 2025, they can be _deliberately compromised_ in a supply chain attack that installs a Remote Access Trojan on developer machines
+- Third-party libraries can be vulnerable or, as happened with `axios@1.14.1` in early 2025, they can be _deliberately compromised_ in a supply chain attack that installs a Remote Access Trojan on developer machines
 - Browser extensions running on your site are outside your control entirely
 
 **The key conclusion:**
 
 > _"Any data accessible to JavaScript is accessible to an attacker via XSS."_
 
-It doesn't matter if it's in localStorage, sessionStorage, or a runtime variable. If JavaScript can read it, so can an attacker who achieves XSS. This single observation shapes every storage decision we'll make later.
-
-```mermaid
-flowchart LR
-    A[Attacker] -->|injects script| B[Your page]
-    B -->|script runs in victim browser| C[JavaScript runtime]
-    C -->|reads localStorage / cookies / variables| D[Auth token]
-    D -->|exfiltrates to| E[evil.com/steal]
-```
+It doesn't matter if it's in localStorage, sessionStorage, or a runtime variable. If JavaScript can read it, so can an attacker.
 
 ### CSRF - Cross-Site Request Forgery
 
@@ -63,7 +55,7 @@ sequenceDiagram
     E->>V: hidden form targeting api.yourapp.com
     V->>A: POST /transfer (browser auto-attaches session cookie)
     A->>A: executes transfer ✓
-    Note over A,V: browser blocks JS from reading the response,<br/>but the server already acted on the request
+    Note over A,V: browser blocks JS from reading the response (CORS),<br/>but the server already acted on the request
 ```
 
 ### "But… doesn't CORS protect us from CSRF?"
@@ -72,9 +64,13 @@ Not really.
 
 **CORS** (Cross-Origin Resource Sharing) is a browser mechanism that _relaxes_ the Same-Origin Policy. By default, JavaScript on `evil.com` cannot read the _response_ from `api.yourapp.com`. CORS allows you to selectively open that up.
 
-But CSRF doesn't need to read the response. Certain requests — simple ones like a `GET` or a plain `POST` with a standard content type — are sent by the browser _before_ any CORS preflight check. The server receives and executes the request; only then does the browser decide whether to show the response to JavaScript. This means a `GET /logout` and a `POST /transfer` can both be triggered cross-origin without preflight, and your server has already acted on them. The HTTP method matters: endpoints that mutate state should never be reachable via `GET`, and relying on CORS alone to block `POST` requests is not safe either.
+But CSRF doesn't need to read the response.
 
-Also worth noting: CORS is enforced by _browsers_. Tools like `curl`, Postman, or any backend-to-backend call ignore it entirely. CORS is not server-side security, it's a browser UX policy.
+Certain requests, simple ones like a `GET` or a plain `POST` with a standard content type, are sent by the browser _before_ any CORS preflight check.
+Sometimes the server receives and executes the request, only then does the browser decide whether to show the response to JavaScript.
+The HTTP method matters: endpoints that mutate state should never be reachable via `GET`, and relying on CORS alone to block `POST` requests is not safe either.
+
+Also worth noting: CORS is enforced by _browsers_. Tools like `curl`, Postman, or any backend-to-backend call ignore it entirely. CORS is not server-side security, it's a browser policy.
 
 ### MITM - Man in the Middle
 
@@ -90,28 +86,15 @@ Here's where it all comes together. After understanding the attack surface, the 
 
 Let's look at the options honestly:
 
-| Storage               | JS Access | XSS Vulnerable | CSRF Vulnerable  | Auto-sent |
-| --------------------- | --------- | -------------- | ---------------- | --------- |
-| `localStorage`        | Yes       | Yes            | No               | No        |
-| `sessionStorage`      | Yes       | Yes            | No               | No        |
-| JS variable (runtime) | Yes       | Yes            | No               | No        |
-| Normal cookie         | Yes       | Yes            | Yes              | Yes       |
-| **HTTP-only cookie**  | **No**    | **No**         | **Configurable** | **Yes**   |
+| Storage              | JS Access | XSS Vulnerable | CSRF Vulnerable  | Auto-sent |
+| -------------------- | --------- | -------------- | ---------------- | --------- |
+| `localStorage`       | Yes       | Yes            | No               | No        |
+| `sessionStorage`     | Yes       | Yes            | No               | No        |
+| JS variable          | Yes       | Yes            | No               | No        |
+| Normal cookie        | Yes       | Yes            | Yes              | Yes       |
+| **HTTP-only cookie** | **No**    | **No**         | **Configurable** | **Yes**   |
 
 The first three rows, localStorage, sessionStorage, JS variables, all share the same problem: JavaScript can read them, which means XSS can steal them.
-
-```mermaid
-flowchart TD
-    Q1{Does JS need
-to read this token?}
-    Q1 -->|Yes| WARN[⚠️ XSS can steal it
-localStorage / sessionStorage / JS var]
-    Q1 -->|No| Q2{Cookie type?}
-    Q2 -->|Normal cookie| WARN2[⚠️ XSS + CSRF vulnerable]
-    Q2 -->|HttpOnly cookie| Q3{Configured correctly?}
-    Q3 -->|Missing Secure or SameSite| WARN3[⚠️ MITM or CSRF risk]
-    Q3 -->|HttpOnly + Secure + SameSite=Strict| SAFE[✅ Safe storage]
-```
 
 Normal cookies are actually _worse_: they're XSS-vulnerable _and_ CSRF-vulnerable.
 
@@ -364,10 +347,4 @@ The BFF pattern is the architectural expression of this principle: by moving aut
 - [jwt.io](https://jwt.io)
 - [RFC 7519 - JSON Web Token](https://datatracker.ietf.org/doc/html/rfc7519)
 
----
-
 > _If something here is wrong, incomplete, or could be explained better, I'd genuinely like to know. Drop a comment below — this is the kind of topic where the discussion is often more valuable than the article._
-
----
-
-_This article is based on two internal engineering sessions on web authentication security. The goal was to build a shared mental model, from foundational attack types to the architectural patterns that address them._
