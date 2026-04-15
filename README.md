@@ -13,7 +13,7 @@ In practice, this means customers, auditors, and non-technical stakeholders will
 
 > _A note before we start: don't take my word for any of this. Security is a field where second opinions matter. Read the specs, check what others have implemented, and form your own conclusions. What follows is my attempt to connect a lot of dots that had been floating separately in my head and I may have gotten some of them wrong. If you spot something, say so in the comments._
 
-## The Classic Attacks (That Still Work)
+## The Classic Attacks
 
 ### XSS - Cross-Site Scripting
 
@@ -75,35 +75,25 @@ Once the attack surface is clear, the obvious next question is: **where should w
 
 Let's look at the options honestly:
 
-| Storage              | JS Access | XSS Vulnerable | CSRF Vulnerable  | Auto-sent |
-| -------------------- | --------- | -------------- | ---------------- | --------- |
-| `localStorage`       | Yes       | Yes            | No               | No        |
-| `sessionStorage`     | Yes       | Yes            | No               | No        |
-| JS variable          | Yes       | Yes            | No               | No        |
-| Normal cookie        | Yes       | Yes            | Yes              | Yes       |
-| **HTTP-only cookie** | **No**    | **No**         | **Configurable** | **Yes**   |
+- **`localStorage`, `sessionStorage`, in-memory JS variables.** Readable by JavaScript, so vulnerable to XSS. Not auto-sent by the browser, so CSRF is not a concern, but the XSS risk alone is disqualifying.
+- **Normal cookies.** Readable by JavaScript _and_ auto-attached to every request. Worst of both worlds: XSS-vulnerable _and_ CSRF-vulnerable.
+- **HTTP-only cookies.** Not readable by JavaScript, so XSS cannot steal them. They're still auto-sent, so CSRF remains a concern, but it can be addressed through cookie configuration (see below).
 
-The first three rows, localStorage, sessionStorage, JS variables, all share the same problem: JavaScript can read them, which means XSS can steal them.
-
-Normal cookies are actually _worse_: they're XSS-vulnerable _and_ CSRF-vulnerable.
-
-The only option that removes JavaScript access by design is an **HTTP-only cookie**. Because JS can't read it, XSS can't steal it. The CSRF risk remains, but it can be addressed through cookie configuration.
+The first three options share the same fundamental problem: JavaScript can read them, which means XSS can steal them. The only option that removes JavaScript access by design is an **HTTP-only cookie**.
 
 > _"By keeping the token outside of JavaScript's reach, even if an XSS vulnerability occurs, the attacker will not be able to steal the user's authentication credentials."_
 
 ### Cookie Attributes That Matter
 
-Once you're using HTTP-only cookies, the configuration of those cookies becomes critical:
+Once you're using HTTP-only cookies, the configuration of those cookies becomes critical. Five attributes matter, each closing a different door:
 
-| Attribute  | Purpose                      | Protects Against |
-| ---------- | ---------------------------- | ---------------- |
-| `HttpOnly` | Prevents JavaScript access   | XSS              |
-| `Secure`   | Sent only over HTTPS         | MITM             |
-| `SameSite` | Restricts cross-site sending | CSRF             |
-| `Path`     | Limits cookie scope          | Scope abuse      |
-| `Max-Age`  | Limits lifetime              | Long exposure    |
+- **`HttpOnly`** prevents JavaScript from reading the cookie. Closes the XSS exfiltration path.
+- **`Secure`** restricts the cookie to HTTPS connections. Closes the MITM eavesdropping path.
+- **`SameSite=Strict`** (or `Lax`) prevents the browser from sending the cookie on cross-site requests. Closes most of the CSRF path at the browser level.
+- **`Path`** limits the cookie to a subset of URLs on the domain, reducing the blast radius if it leaks.
+- **`Max-Age`** caps the cookie's lifetime, limiting how long a stolen cookie stays useful.
 
-All five matter. `SameSite=Strict` or `SameSite=Lax` addresses most CSRF risk at the cookie level.
+All five matter. `SameSite=Strict` or `SameSite=Lax` in particular addresses most CSRF risk at the cookie level.
 
 If you want to experiment with how cookie attributes affect real attack scenarios, this playground walks through it interactively:  
 [tkachenko0/cookies-playground](https://github.com/tkachenko0/cookies-playground)
