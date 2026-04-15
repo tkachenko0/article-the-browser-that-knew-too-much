@@ -318,18 +318,6 @@ A properly implemented BFF addresses the full threat model:
 
 The open-source implementation referenced throughout this article is available at [tkachenko0/oauth2-bff-proxy](https://github.com/tkachenko0/oauth2-bff-proxy). It supports AWS Cognito, Microsoft Entra ID, and Keycloak out of the box, and the README documents every security decision in detail — including exactly why each cookie attribute is set the way it is, and how the Double Submit Cookie Pattern is wired up end-to-end.
 
-## Wrapping Up
-
-The thread connecting everything here is a single principle: **security by design means keeping sensitive data in places where the attack surface can't reach it**.
-
-- Tokens accessible to JavaScript can be stolen via XSS
-- Cookies without proper attributes can be hijacked or forged
-- OAuth flows without state, nonce, and PKCE can be subverted
-- JWTs without full claim validation can be replayed or forged
-- Frontend-only authentication architectures concentrate risk in the worst possible place
-
-The BFF pattern is the architectural expression of this principle: by moving authentication out of the browser, you remove an entire class of vulnerabilities by construction rather than by defense.
-
 ## Resources and Playgrounds
 
 **Interactive tools (open source):**
