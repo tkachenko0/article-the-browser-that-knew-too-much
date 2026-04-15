@@ -4,28 +4,22 @@ _XSS, CSRF, OAuth 2.0, JWTs, the BFF Pattern, and are you ready for Claude Mytho
 
 > _A note before we start: don't take my word for any of this. Security is a field where second opinions matter. Read the specs, check what others have implemented, and form your own conclusions. What follows is my attempt to connect a lot of dots that had been floating separately in my head — and I may have gotten some of them wrong. If you spot something, say so in the comments._
 
-Web security is one of those domains where the gap between knowing a concept and applying it correctly is surprisingly wide. XSS, CSRF, MITM — everyone's heard of them. But the path from "I know what XSS is" to "my token storage is actually safe" is full of non-obvious decisions.
+Web security is one of those domains where the gap between knowing a concept and applying it correctly is surprisingly wide. XSS, CSRF, MITM...
+everyone's heard of them. But the path from "I know what XSS is" to "my token storage is actually safe" is full of non obvious decisions.
 
 And right now, that gap matters more than ever.
 
-In April 2026, Anthropic announced **Claude Mythos Preview** — a new tier of model, larger and more capable than any Opus before it, with cybersecurity skills the industry is still processing. Used with Claude Code, Mythos reads a codebase, hypothesizes vulnerabilities, runs the actual application to confirm or reject them, and produces a bug report with a proof-of-concept exploit — autonomously, in parallel across every file. In pre-release testing it found thousands of previously unknown zero-day vulnerabilities across every major operating system and browser, including a 27-year-old flaw in OpenBSD and a 16-year-old flaw in FFmpeg, bugs that had survived decades of human review and millions of automated tests. Anthropic responded by launching **Project Glasswing**, a $100M initiative to use Mythos to harden the world's most critical software, in partnership with AWS, Apple, Microsoft, Google, and CrowdStrike.
+In April 2026, Anthropic announced **Claude Mythos Preview**, a new tier of model, larger and more capable than any Opus before it, with cybersecurity skills the industry is still processing. Used with Claude Code, Mythos reads a codebase, hypothesizes vulnerabilities, runs the actual application to confirm or reject them, and produces a bug report with a proof-of-concept exploit autonomously, in parallel across every file. In pre-release testing it found thousands of previously unknown zero-day vulnerabilities across every major operating system and browser, including a 27-year-old flaw in OpenBSD and a 16-year-old flaw in FFmpeg, bugs that had survived decades of human review and millions of automated tests.
 
-The implication is direct: soon, customers, auditors, and non-technical stakeholders will be able to point an agent at a vendor's application and get a structured security report without writing a single line of code. The question is no longer whether your authentication flow is safe from an attacker who knows what they're doing. It's whether it holds up against a model that can reason through your entire codebase in minutes.
+The implication is direct: soon, customers, auditors, and non-technical stakeholders will be able to point an agent at a vendor's application and get a structured security report without writing a single line of code.
 
-This article gives you the mental model to answer that question. It covers the classic attacks that are still the first things any security tool checks — XSS, CSRF, MITM — then works through secure token storage, Content Security Policy, OAuth 2.0, JWT vulnerabilities, and the Backend for Frontend pattern that ties it all together.
+## The Classic Attacks (That Still Work)
 
-## Part 1: The Classic Attacks (That Still Work)
-
-### XSS — Cross-Site Scripting
+### XSS - Cross-Site Scripting
 
 XSS is old. It's been on the OWASP Top 10 for decades. It also keeps happening.
 
 The concept is simple: an attacker finds a way to inject JavaScript into your page. Once that script runs in a victim's browser, it has access to everything JavaScript can touch, cookies, localStorage, sessionStorage, runtime variables. It can silently exfiltrate tokens, session IDs, or form data to an attacker-controlled server.
-
-**Real-world examples:**
-
-- **British Airways (2018):** Attackers injected a script via a vulnerable third-party library (`Feedify`) on the checkout page. Around 380,000 booking transactions were skimmed before it was caught.
-- **Fortnite (2019):** An XSS vulnerability could redirect players to a fake login page, enabling credential theft and account takeover across 200+ million accounts.
 
 **"But I'm using React/Vue/Angular..."**
 
@@ -43,22 +37,19 @@ It doesn't matter if it's in localStorage, sessionStorage, or a runtime variable
 
 ```mermaid
 flowchart LR
-    A[Attacker] -->|injects malicious script| B[Your page]
+    A[Attacker] -->|injects script| B[Your page]
     B -->|script runs in victim browser| C[JavaScript runtime]
     C -->|reads localStorage / cookies / variables| D[Auth token]
     D -->|exfiltrates to| E[evil.com/steal]
 ```
 
-### CSRF — Cross-Site Request Forgery
+### CSRF - Cross-Site Request Forgery
 
 Where XSS tries to _steal_ your credentials, CSRF tries to _use_ them without you knowing.
 
 The attack exploits the fact that browsers automatically attach cookies to requests, regardless of where the request originates. An attacker can craft a malicious page that silently sends a POST request to your bank (or your app), and the browser will helpfully include the session cookie.
 
 The victim doesn't lose their token. They just unknowingly transfer money, change their email, or perform whatever action the attacker engineered.
-
-**Real-world example:**
-TikTok (2020), attackers could send malicious messages that exploited a CSRF/XSS combination to force accounts to perform actions without user consent. The patch took three weeks, during which the scale of exploitation is unknown.
 
 A key characteristic of CSRF attacks: they look like normal user activity in server logs. They're systematically underreported.
 
@@ -72,12 +63,12 @@ sequenceDiagram
     E->>V: hidden form targeting api.yourapp.com
     V->>A: POST /transfer (browser auto-attaches session cookie)
     A->>A: executes transfer ✓
-    A->>V: response (browser blocks JS from reading it, but damage is done)
+    Note over A,V: browser blocks JS from reading the response,<br/>but the server already acted on the request
 ```
 
 ### "But… doesn't CORS protect us from CSRF?"
 
-This is one of the most common misconceptions in web security. The short answer: not really.
+Not really.
 
 **CORS** (Cross-Origin Resource Sharing) is a browser mechanism that _relaxes_ the Same-Origin Policy. By default, JavaScript on `evil.com` cannot read the _response_ from `api.yourapp.com`. CORS allows you to selectively open that up.
 
@@ -85,17 +76,15 @@ But CSRF doesn't need to read the response. Certain requests — simple ones lik
 
 Also worth noting: CORS is enforced by _browsers_. Tools like `curl`, Postman, or any backend-to-backend call ignore it entirely. CORS is not server-side security, it's a browser UX policy.
 
-### MITM — Man in the Middle
+### MITM - Man in the Middle
 
 MITM attacks intercept traffic between client and server. Common vectors: public Wi-Fi, DNS poisoning, compromised routers.
 
 The standard defense is HTTPS, which encrypts traffic so an eavesdropper sees only noise.
 
-**But HTTPS alone isn't enough.** If a session cookie lacks the `Secure` flag, the browser may send it over unencrypted connections too. An attacker on the same network who downgrades your connection can still intercept it.
-
 HTTPS is necessary but not sufficient. The cookie configuration matters too.
 
-## Part 2: Secure Token Storage
+## Secure Token Storage
 
 Here's where it all comes together. After understanding the attack surface, the question is: **where should we store authentication tokens?**
 
@@ -113,14 +102,14 @@ The first three rows, localStorage, sessionStorage, JS variables, all share the 
 
 ```mermaid
 flowchart TD
-    Q1{Does JavaScript need
+    Q1{Does JS need
 to read this token?}
     Q1 -->|Yes| WARN[⚠️ XSS can steal it
 localStorage / sessionStorage / JS var]
-    Q1 -->|No| Q2{Is it a cookie?}
+    Q1 -->|No| Q2{Cookie type?}
     Q2 -->|Normal cookie| WARN2[⚠️ XSS + CSRF vulnerable]
     Q2 -->|HttpOnly cookie| Q3{Configured correctly?}
-    Q3 -->|Missing Secure / SameSite| WARN3[⚠️ MITM or CSRF risk]
+    Q3 -->|Missing Secure or SameSite| WARN3[⚠️ MITM or CSRF risk]
     Q3 -->|HttpOnly + Secure + SameSite=Strict| SAFE[✅ Safe storage]
 ```
 
@@ -147,7 +136,7 @@ All five matter. `SameSite=Strict` or `SameSite=Lax` addresses most CSRF risk at
 If you want to experiment with how cookie attributes affect real attack scenarios, this playground walks through it interactively:  
 [tkachenko0/cookies-playground](https://github.com/tkachenko0/cookies-playground)
 
-## Part 3: Content Security Policy
+## Content Security Policy
 
 Even with good storage practices, XSS is still a threat if an attacker can inject scripts into your page. **Content Security Policy (CSP)** is a secondary defense that limits the damage.
 
@@ -168,13 +157,9 @@ CSP also has a `report-to` directive that sends violation data to your endpoint,
 
 **Bad patterns should fail fast and loud.** CSP makes that happen.
 
-If you want to see CSP in action and understand what it blocks (and why), this playground lets you experiment live:  
-[tkachenko0/csp-playground](https://github.com/tkachenko0/csp-playground)
+If you want to see CSP in action and understand what it blocks (and why), this playground lets you experiment: [tkachenko0/csp-playground](https://github.com/tkachenko0/csp-playground)
 
-And to evaluate whether an existing CSP policy is strong enough:  
-[CSP Evaluator (Google)](https://csp-evaluator.withgoogle.com/)
-
-## Part 4: OAuth 2.0
+## OAuth 2.0
 
 Once you understand token storage, the next question is how tokens get issued in the first place. That's where **OAuth 2.0** comes in.
 
@@ -195,7 +180,7 @@ OAuth 2.0 defines several "grant types" (flows). For SPAs, the right choice is:
 
 The basic Authorization Code flow works like this: the user authenticates with the Authorization Server, which returns a short-lived _code_ to the client. The client exchanges that code for tokens. This is secure for server-side apps that can store a **Client Secret**, used to authenticate the client during the exchange.
 
-SPAs can't store secrets. Any secret embedded in frontend code is visible to anyone who opens DevTools.
+SPAs can't store a Client Secret securely. Any secret embedded in frontend code is exposed. And even without a secret, the Authorization Code alone is a liability: if intercepted in transit, an attacker can exchange it for tokens before your app does.
 
 **PKCE (Proof Key for Code Exchange)** solves this:
 
@@ -207,32 +192,29 @@ Even if an attacker intercepts the authorization code, they can't exchange it wi
 
 ```mermaid
 sequenceDiagram
-    participant B as Browser (SPA)
-    participant BFF as BFF / Client
+    participant B as Browser / Client
     participant IDP as Authorization Server
 
-    BFF->>BFF: generate code_verifier (random)
-    BFF->>BFF: code_challenge = SHA256(code_verifier)
-    BFF->>IDP: GET /authorize?code_challenge=...&state=...
+    B->>B: generate code_verifier (random)
+    B->>B: code_challenge = SHA256(code_verifier)
+    B->>IDP: GET /authorize?code_challenge=...&state=...
     IDP->>B: redirect to login
     B->>IDP: user authenticates
-    IDP->>BFF: redirect with code=ABC
-    BFF->>IDP: POST /token — code=ABC + code_verifier
+    IDP->>B: redirect with code=ABC
+    B->>IDP: POST /token — code=ABC + code_verifier
     IDP->>IDP: SHA256(code_verifier) === stored code_challenge?
-    IDP->>BFF: ✅ access_token, id_token, refresh_token
+    IDP->>B: ✅ access_token, id_token, refresh_token
 ```
-
-PKCE is now **mandatory for all public clients** and will be the standard in OAuth 2.1.
 
 ### OAuth 2.0 — What Can Go Wrong
 
 Several implementation mistakes routinely turn up in real applications:
 
-**Missing state parameter validation** — The `state` parameter is a random value the client generates and includes in the authorization request. The server echoes it back, and the client _must_ verify it matches. Without this check, an attacker can craft a CSRF attack on the OAuth flow itself, forcing a victim to link their account to the attacker's identity provider account.
+**Missing state parameter validation** The `state` parameter is a random value the client generates and includes in the authorization request. The server echoes it back, and the client _must_ verify it matches. Without this check, an attacker can craft a CSRF attack on the OAuth flow itself, forcing a victim to link their account to the attacker's identity provider account.
 
-**Missing nonce validation** — Similar to state, the `nonce` binds the ID token to a specific session. Skipping it opens replay attack vectors.
+**Missing nonce validation** Similar to state, the `nonce` binds the ID token to a specific session. Skipping it opens replay attack vectors.
 
-**Weak or absent token validation** — APIs must verify all of these on every token:
+**Weak or absent token validation** APIs must verify all of these on every token:
 
 - `iss` (issuer): is this from the expected authorization server?
 - `aud` (audience): is this token intended for this API?
@@ -241,7 +223,7 @@ Several implementation mistakes routinely turn up in real applications:
 
 Skipping any of these is not "good enough." An expired token, a token from the wrong tenant, or a token forged by algorithm confusion all look valid to code that doesn't check.
 
-## Part 5: JWTs — Structure and Vulnerabilities
+## JWTs Structure and Vulnerabilities
 
 Access tokens are commonly issued as **JSON Web Tokens (JWTs)**. A JWT is a self-contained, signed JSON structure, the server can verify its authenticity without a database lookup.
 
@@ -255,25 +237,6 @@ header.payload.signature
 - **Payload**: claims - `sub`, `iat`, `exp`, `iss`, `aud`
 - **Signature**: cryptographic proof the token hasn't been tampered with
 
-```mermaid
-flowchart LR
-    subgraph JWT
-        H["Header
-{ alg: RS256, typ: JWT }"]
-        P["Payload
-{ sub, iat, exp, iss, aud }"]
-        S["Signature
-SHA256(header.payload, privateKey)"]
-    end
-    H -->|base64url| T1[eyJ...]
-    P -->|base64url| T2[eyJ...]
-    S -->|base64url| T3[SflK...]
-    T1 --- DOT1[.]
-    DOT1 --- T2
-    T2 --- DOT2[.]
-    DOT2 --- T3
-```
-
 Algorithms can be symmetric (shared secret, e.g. HS256) or asymmetric (private key signs, public key verifies, e.g. RS256).
 
 ### JWT Attack Patterns
@@ -282,9 +245,9 @@ Algorithms can be symmetric (shared secret, e.g. HS256) or asymmetric (private k
 Some implementations decode the token to read claims without verifying the signature. An attacker can modify `sub` to impersonate any user. This still shows up in penetration tests.
 
 **Algorithm None attack**
-The JWT spec includes `"alg": "none"`, meaning no signature is required. If a server accepts this, an attacker can craft arbitrary tokens with no secret required. Fix: **whitelist allowed algorithms explicitly** — never blacklist.
+The JWT spec includes `"alg": "none"`, meaning no signature is required. If a server accepts this, an attacker can craft arbitrary tokens with no secret required. Fix: **whitelist allowed algorithms explicitly** and never blacklist.
 
-**Algorithm Confusion (RS256 → HS256)**
+**Algorithm Confusion**
 If the server uses RS256 (asymmetric), the public key is by definition public. An attacker can switch the header to HS256 (symmetric) and sign the token using the _public key as the secret_. If the server doesn't enforce which algorithm it expects, it will verify this as valid.
 
 Fix: **explicitly enforce the expected algorithm**. Never let the token header dictate how it gets verified.
@@ -294,7 +257,7 @@ A valid signature doesn't mean the claims are valid. `exp`, `iss`, `aud`, and `s
 
 For testing JWT vulnerabilities: [jwt.io](https://jwt.io) for inspection, and `jwt_tool.py` for attack simulation.
 
-## Part 6: The Backend for Frontend (BFF) Pattern
+## The Backend for Frontend (BFF) Pattern
 
 After all of the above, one conclusion is unavoidable:
 
@@ -302,16 +265,14 @@ After all of the above, one conclusion is unavoidable:
 
 The **Backend for Frontend (BFF)** pattern is the architectural response to this.
 
-In a traditional SPA architecture, the frontend handles the entire OAuth flow: redirects, code exchange, token storage, token refresh. Every token lives in the browser, accessible to JavaScript.
-
 The BFF pattern introduces a thin backend layer, co-located with the frontend, acting as its proxy, that owns the entire authentication flow:
 
 ```mermaid
 flowchart TD
     B[Browser SPA] -->|all requests| BFF[BFF Proxy]
-    BFF -->|OAuth flow + PKCE| IDP[Identity Provider]
-    BFF -->|proxies with X-User headers| API[Backend API]
-    BFF -->|sets HttpOnly cookies| B
+    BFF -->|OAuth 2.0 + PKCE| IDP[Identity Provider]
+    BFF -->|proxies with X-User-* headers| API[Backend API]
+    BFF -->|sets HttpOnly + Secure + SameSite cookies| B
     IDP -->|tokens| BFF
     API -->|response| BFF
 ```
@@ -335,17 +296,17 @@ sequenceDiagram
     B->>BFF: GET /auth/login
     BFF->>BFF: generate state, nonce, code_verifier
     BFF->>B: set HttpOnly cookies (state, nonce, verifier)
-    BFF->>B: 302 → IDP /authorize
+    BFF->>B: 302 redirect to IDP /authorize
     B->>IDP: user authenticates
     IDP->>BFF: 302 callback with code + state
     BFF->>BFF: validate state cookie
     BFF->>IDP: POST /token (code + code_verifier)
     IDP->>BFF: tokens
-    BFF->>BFF: verify JWT signatures, validate claims
+    BFF->>BFF: verify JWT signatures + validate claims
     BFF->>B: set HttpOnly auth cookies + csrf_token cookie
     B->>BFF: POST /api/data + X-CSRF-Token header
-    BFF->>BFF: validate CSRF token
-    BFF->>API: proxied request + X-User-Sub / X-User-Email headers
+    BFF->>BFF: validate CSRF token match
+    BFF->>API: proxied request + X-User-Sub / X-User-Email
     API->>B: response
 ```
 
@@ -370,30 +331,9 @@ A properly implemented BFF addresses the full threat model:
 ### BFF Notes and Trade-offs
 
 - The BFF doesn't have to be a generic proxy. It can be implemented as a library for a specific framework, eliminating the extra network hop
-- For mobile apps, cookie-based flows are more complex since mobile isn't a browser, cookie handling isn't native
-- If you already have a SPA + backend using a managed provider (Cognito, Keycloak, Azure AD), BFF integration is straightforward
+- For mobile apps, cookie-based flows are more complex since mobile isn't a browser
 
 The open-source implementation referenced throughout this article is available at [tkachenko0/oauth2-bff-proxy](https://github.com/tkachenko0/oauth2-bff-proxy). It supports AWS Cognito, Microsoft Entra ID, and Keycloak out of the box, and the README documents every security decision in detail — including exactly why each cookie attribute is set the way it is, and how the Double Submit Cookie Pattern is wired up end-to-end.
-
-## So, Are You Ready for Claude Mythos?
-
-Everything in this article — cookie attributes, PKCE, JWT claim validation, the BFF pattern — represents the exact layer of defenses that a model like Mythos will probe first.
-
-**Claude Code Security**, available today via the `/security-review` command in Claude Code, already reasons through codebases the way a human security researcher would: tracing data flows across files, reading Git history, understanding business logic. It catches authentication bypasses and broken access control that pattern-matching tools miss entirely, and a companion GitHub Action can trigger automatically on every pull request. Early 2026 also saw an explosion of MCP-based pentesting projects connecting Claude Code to tools like nmap, Metasploit, and Nuclei — meaning an agent can find a vulnerability statically, then probe a running application dynamically, generate a payload, analyze the response, and retry.
-
-Mythos takes this further. Anthropic has stated that its goal is to enable safe deployment of Mythos-class capabilities at scale. Other AI labs are building comparable models. The window between a vulnerability being discovered and being exploited has collapsed — what once took months now happens in minutes.
-
-The patterns in this article aren't defensive theory. They're the checklist Claude Mythos will run against your application — and the reason it should find nothing.
-
----
-
-## A Note on Zero-Day Attacks
-
-Everything above addresses _known_ vulnerabilities, attacks that have been documented, catalogued, and defended against for years.
-
-There's a harder category: **zero-day attacks**. These are vulnerabilities for which defenders had zero days to prepare. The `axios` supply chain attack mentioned earlier, where a compromised package version installed a Remote Access Trojan, is an example. No amount of CSRF protection would have helped.
-
-The useful observation is this: the _known_ attacks are often easier to land than zero-days, precisely because they're well-understood and patterns for exploiting them are widely shared. By implementing the defenses above consistently, you also raise the floor high enough that it becomes harder to chain zero-day vectors with known weaknesses.
 
 ## Wrapping Up
 
@@ -424,4 +364,10 @@ The BFF pattern is the architectural expression of this principle: by moving aut
 - [jwt.io](https://jwt.io)
 - [RFC 7519 - JSON Web Token](https://datatracker.ietf.org/doc/html/rfc7519)
 
+---
+
 > _If something here is wrong, incomplete, or could be explained better, I'd genuinely like to know. Drop a comment below — this is the kind of topic where the discussion is often more valuable than the article._
+
+---
+
+_This article is based on two internal engineering sessions on web authentication security. The goal was to build a shared mental model, from foundational attack types to the architectural patterns that address them._
