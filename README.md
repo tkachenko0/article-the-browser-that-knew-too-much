@@ -237,7 +237,7 @@ A properly implemented BFF addresses the full threat model:
 - **JWT**: Signature verification via, explicit algorithm whitelist, full claim validation (`iss`, `aud`, `exp`, `sub`), plus a token consistency check. If only one of `id_token`/`access_token` is present, the session is considered tampered and all cookies are cleared
 - **OAuth 2.0**: State parameter validation, nonce validation, PKCE
 
-### BFF Notes and Trade-offs
+### Notes
 
 - The BFF doesn't have to be a generic proxy. It can be implemented as a library for a specific framework, eliminating the extra network
 - For mobile apps, cookie-based flows are more complex since mobile isn't a browser
